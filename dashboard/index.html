@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Job Queue Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --surface: #111111;
+      --border: #1e1e1e;
+      --text: #e8e8e8;
+      --muted: #555;
+      --pending: #f59e0b;
+      --processing: #3b82f6;
+      --completed: #22c55e;
+      --failed: #ef4444;
+      --accent: #e8e8e8;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 13px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+
+    .logo span { color: var(--muted); }
+
+    #connection-badge {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 2px;
+      background: #1a1a1a;
+      border: 1px solid var(--border);
+      letter-spacing: 0.05em;
+    }
+
+    #connection-badge.connected { color: var(--completed); border-color: var(--completed); }
+    #connection-badge.disconnected { color: var(--failed); border-color: var(--failed); }
+
+    main { padding: 32px; max-width: 1200px; margin: 0 auto; }
+
+    /* Stats */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+    }
+
+    .stat-card.pending::before { background: var(--pending); }
+    .stat-card.processing::before { background: var(--processing); }
+    .stat-card.completed::before { background: var(--completed); }
+    .stat-card.failed::before { background: var(--failed); }
+
+    .stat-label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .stat-value {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 40px;
+      font-weight: 600;
+      line-height: 1;
+      transition: all 0.3s ease;
+    }
+
+    .stat-card.pending .stat-value { color: var(--pending); }
+    .stat-card.processing .stat-value { color: var(--processing); }
+    .stat-card.completed .stat-value { color: var(--completed); }
+    .stat-card.failed .stat-value { color: var(--failed); }
+
+    /* Layout */
+    .content-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 24px;
+    }
+
+    /* Panel */
+    .panel {
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .panel-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* OTP Form */
+    .form-body { padding: 20px; }
+
+    .field { margin-bottom: 16px; }
+
+    .field label {
+      display: block;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .field input, .field select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .field input:focus, .field select:focus {
+      border-color: #333;
+    }
+
+    .field select option { background: var(--bg); }
+
+    .otp-display {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 20px;
+      letter-spacing: 0.3em;
+      color: var(--completed);
+      text-align: center;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 12px;
+      background: var(--text);
+      color: var(--bg);
+      border: none;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #send-status {
+      margin-top: 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      text-align: center;
+      min-height: 16px;
+    }
+
+    /* Job Feed */
+    #job-feed { max-height: 520px; overflow-y: auto; }
+
+    .job-row {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.1s;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      animation: slideIn 0.2s ease;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(-8px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    .job-row:hover { background: #161616; }
+    .job-row:last-child { border-bottom: none; }
+
+    .job-type {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .job-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    .job-badge {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px;
+      padding: 3px 8px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .badge-pending { color: var(--pending); border: 1px solid var(--pending); }
+    .badge-processing { color: var(--processing); border: 1px solid var(--processing); }
+    .badge-completed { color: var(--completed); border: 1px solid var(--completed); }
+    .badge-failed { color: var(--failed); border: 1px solid var(--failed); }
+
+    .empty-state {
+      padding: 48px 20px;
+      text-align: center;
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+    }
+
+    /* Modal */
+    #modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #modal-overlay.open { display: flex; }
+
+    #modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      width: 560px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .modal-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-title {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+
+    .modal-close:hover { color: var(--text); }
+
+    .modal-body { padding: 24px; }
+
+    .detail-row {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+      align-items: start;
+    }
+
+    .detail-key {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding-top: 1px;
+    }
+
+    .detail-val {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    pre {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      padding: 12px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11px;
+      overflow-x: auto;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Job<span>/</span>Queue <span>—</span> Dashboard</div>
+  <div id="connection-badge" class="disconnected">● DISCONNECTED</div>
+</header>
+
+<main>
+  <!-- Stats -->
+  <div class="stats-grid">
+    <div class="stat-card pending">
+      <div class="stat-label">Pending</div>
+      <div class="stat-value" id="stat-pending">0</div>
+    </div>
+    <div class="stat-card processing">
+      <div class="stat-label">Processing</div>
+      <div class="stat-value" id="stat-processing">0</div>
+    </div>
+    <div class="stat-card completed">
+      <div class="stat-label">Completed</div>
+      <div class="stat-value" id="stat-completed">0</div>
+    </div>
+    <div class="stat-card failed">
+      <div class="stat-label">Failed</div>
+      <div class="stat-value" id="stat-failed">0</div>
+    </div>
+  </div>
+
+  <div class="content-grid">
+    <!-- Job Feed -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Live Job Feed</span>
+        <span id="job-count">0 jobs</span>
+      </div>
+      <div id="job-feed">
+        <div class="empty-state">No jobs yet. Send an OTP to get started.</div>
+      </div>
+    </div>
+
+    <!-- OTP Form -->
+    <div>
+      <div class="panel">
+        <div class="panel-header">Send OTP</div>
+        <div class="form-body">
+          <div class="field">
+            <label>Phone Number</label>
+            <input type="text" id="phone" placeholder="9876543210" maxlength="10" />
+          </div>
+          <div class="field">
+            <label>OTP (auto-generated)</label>
+            <div class="otp-display" id="otp-display">------</div>
+          </div>
+          <div class="field">
+            <label>Priority</label>
+            <select id="priority">
+              <option value="high">High</option>
+              <option value="medium" selected>Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+          <button class="btn" id="send-btn" onclick="sendOTP()">Send OTP</button>
+          <div id="send-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- Job Detail Modal -->
+<div id="modal-overlay" onclick="closeModal(event)">
+  <div id="modal">
+    <div class="modal-header">
+      <div class="modal-title">Job Detail</div>
+      <button class="modal-close" onclick="document.getElementById('modal-overlay').classList.remove('open')">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+  const API = '';
+  let jobs = [];
+
+  // Generate random 6-digit OTP
+  function generateOTP() {
+    return String(Math.floor(100000 + Math.random() * 900000));
+  }
+
+  let currentOTP = generateOTP();
+  document.getElementById('otp-display').textContent = currentOTP;
+
+  // Socket.io
+  const socket = io(API);
+
+  socket.on('connect', () => {
+    document.getElementById('connection-badge').textContent = '● CONNECTED';
+    document.getElementById('connection-badge').className = 'connected';
+  });
+
+  socket.on('disconnect', () => {
+    document.getElementById('connection-badge').textContent = '● DISCONNECTED';
+    document.getElementById('connection-badge').className = 'disconnected';
+  });
+
+  socket.on('job:update', (event) => {
+  if (event.event === 'created' && event.job) {
+    jobs.unshift(event.job);
+  } else if (event.dbId) {
+    // completed or failed — match by dbId
+    jobs = jobs.map(j => {
+      if (j.id === event.dbId) {
+        return {
+          ...j,
+          status: event.event === 'completed' ? 'completed' : 'failed',
+          result: event.result || j.result,
+          error: event.error || j.error,
+        };
+      }
+      return j;
+    });
+  }
+  renderJobs();
+  fetchStats();
+});
+
+  // Fetch initial data
+  async function fetchJobs() {
+    const res = await fetch(`${API}/jobs`);
+    jobs = await res.json();
+    renderJobs();
+  }
+
+  async function fetchStats() {
+    const res = await fetch(`${API}/stats`);
+    const stats = await res.json();
+    document.getElementById('stat-pending').textContent = stats.pending || 0;
+    document.getElementById('stat-processing').textContent = stats.processing || 0;
+    document.getElementById('stat-completed').textContent = stats.completed || 0;
+    document.getElementById('stat-failed').textContent = stats.failed || 0;
+  }
+
+  function renderJobs() {
+    const feed = document.getElementById('job-feed');
+    document.getElementById('job-count').textContent = `${jobs.length} jobs`;
+
+    if (jobs.length === 0) {
+      feed.innerHTML = '<div class="empty-state">No jobs yet. Send an OTP to get started.</div>';
+      return;
+    }
+
+    feed.innerHTML = jobs.map(job => `
+      <div class="job-row" onclick="showDetail('${job.id}')">
+        <div>
+          <div class="job-type">${job.type}</div>
+          <div class="job-meta">${job.priority} · ${new Date(job.created_at).toLocaleTimeString()}</div>
+        </div>
+        <span class="job-badge badge-${job.status}">${job.status}</span>
+      </div>
+    `).join('');
+  }
+
+  async function sendOTP() {
+    const phone = document.getElementById('phone').value.trim();
+    const priority = document.getElementById('priority').value;
+    const statusEl = document.getElementById('send-status');
+    const btn = document.getElementById('send-btn');
+
+    if (!phone || phone.length !== 10) {
+      statusEl.style.color = '#ef4444';
+      statusEl.textContent = 'Enter a valid 10-digit number';
+      return;
+    }
+
+    btn.disabled = true;
+    statusEl.style.color = '#3b82f6';
+    statusEl.textContent = 'Sending...';
+
+    try {
+      const res = await fetch(`${API}/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'otp',
+          payload: { phone, otp: currentOTP },
+          priority,
+        }),
+      });
+
+      if (!res.ok) throw new Error('Request failed');
+
+      statusEl.style.color = '#22c55e';
+      statusEl.textContent = `✓ OTP ${currentOTP} queued`;
+
+      // Generate new OTP for next send
+      currentOTP = generateOTP();
+      document.getElementById('otp-display').textContent = currentOTP;
+      document.getElementById('phone').value = '';
+
+    } catch (err) {
+      statusEl.style.color = '#ef4444';
+      statusEl.textContent = 'Failed to queue job';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function showDetail(id) {
+    const job = jobs.find(j => j.id === id);
+    if (!job) return;
+
+    document.getElementById('modal-body').innerHTML = `
+      <div class="detail-row">
+        <div class="detail-key">ID</div>
+        <div class="detail-val">${job.id}</div>
+      </div>
+      <div class="detail-row">
+        <div class="detail-key">Type</div>
+        <div class="detail-val">${job.type}</div>
+      </div>
+      <div class="detail-row">
+        <div class="detail-key">Status</div>
+        <div class="detail-val"><span class="job-badge badge-${job.status}">${job.status}</span></div>
+      </div>
+      <div class="detail-row">
+        <div class="detail-key">Priority</div>
+        <div class="detail-val">${job.priority}</div>
+      </div>
+      <div class="detail-row">
+        <div class="detail-key">Attempts</div>
+        <div class="detail-val">${job.attempts}</div>
+      </div>
+      <div class="detail-row">
+        <div class="detail-key">Created</div>
+        <div class="detail-val">${new Date(job.created_at).toLocaleString()}</div>
+      </div>
+      <div class="detail-row">
+        <div class="detail-key">Updated</div>
+        <div class="detail-val">${new Date(job.updated_at).toLocaleString()}</div>
+      </div>
+      <div class="detail-row">
+        <div class="detail-key">Payload</div>
+        <div class="detail-val"><pre>${JSON.stringify(job.payload, null, 2)}</pre></div>
+      </div>
+      ${job.result ? `
+      <div class="detail-row">
+        <div class="detail-key">Result</div>
+        <div class="detail-val"><pre>${JSON.stringify(job.result, null, 2)}</pre></div>
+      </div>` : ''}
+      ${job.error ? `
+      <div class="detail-row">
+        <div class="detail-key">Error</div>
+        <div class="detail-val" style="color: var(--failed)">${job.error}</div>
+      </div>` : ''}
+    `;
+
+    document.getElementById('modal-overlay').classList.add('open');
+  }
+
+  function closeModal(e) {
+    if (e.target === document.getElementById('modal-overlay')) {
+      document.getElementById('modal-overlay').classList.remove('open');
+    }
+  }
+
+  // Init
+  fetchJobs();
+  fetchStats();
+</script>
+</body>
+</html>
